@@ -1,0 +1,6 @@
+Revision history for Perl extension Games::Go::Player.
+
+0.01  Wed Mar 12 23:17:32 2008
+	- original version; created by h2xs 1.23 with options
+		-X -n Games::Go::Player
+

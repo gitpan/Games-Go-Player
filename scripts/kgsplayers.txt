@@ -1,0 +1,24 @@
+#List of KGS players whose games you want to download
+#Start a line with a '#' and kgshoover will ignore that line.
+Adriano
+BBJkgGo
+Beren
+Bindiou
+#BoDai
+#chako
+#Cnorris
+#compart
+#crpnp
+#Ability
+#absenta
+#Andrerieu
+#Apina
+#apple2
+#ArCosH
+#armiad
+#Back2Basix
+#barty
+#blaumag
+#blitzme
+#chemiker
+#Cornelius

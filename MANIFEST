@@ -1,0 +1,16 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/Games-Go-Player.t
+lib/Games/Go/Player.pm
+scripts/kgsbot.pl
+scripts/kgshoover.pl
+scripts/kgsplayers.txt
+scripts/tiestats.pl
+scripts/kgslearn.sh
+scripts/removeTags.pl
+scripts/kgsuserfile.pl
+scripts/kgsuserdir.pl
+
+META.yml                                 Module meta-data (added by MakeMaker)
