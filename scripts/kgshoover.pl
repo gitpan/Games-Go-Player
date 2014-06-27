@@ -9,7 +9,6 @@
 # http://www.gokgs.com/servlet/archives/en_US/Abc-2008-3.zip
 # for March 2008, and that the link to April's zip is written
 # gameArchives.jsp?user=Abc&amp;year=2008&amp;month=4
-# Written by D.Gilder 2007
 
 use strict;
 use warnings;

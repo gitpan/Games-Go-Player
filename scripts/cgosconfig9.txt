@@ -1,0 +1,14 @@
+# config file for testing various version of cgosbot
+# used with: cgosGtp-linux-x86_32 -c cgosconfig9.txt
+# --------------------------------------------------
+
+%section server
+    server cgos.boardspace.net
+    port 6867
+
+%section player
+     name      ppme-0.08
+     password  abcxyz
+     invoke    perl cgosbot.pl 9
+     priority  7
+

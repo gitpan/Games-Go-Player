@@ -6,7 +6,8 @@ use Games::Go::Player;
 use IO::File;
 
 my $pathname = shift;
-my $pfile = shift;
+my $pfile;
+my $size = shift;
 my $slurpfile;
 
 if (defined $pfile) {
@@ -17,17 +18,9 @@ if (defined $pfile) {
 }
 
 my $player  = new Games::Go::Player;
-#$player->debug(1);
+$player->logfile('./log.txt');
 my ($filename, $dirname) = fileparse($pathname);
-if ($filename =~ /(\d+)/) {
-  $player->size(19);
-  $player->path($dirname);
-#  $player->symmetrise;
-#  $player->tiestats($pathname);
-  $player->updateMax;
-#  $player->retrieve($pathname, $slurpfile) if defined $slurpfile;
-#  $player->DBdump($pathname);
-} else {
-  print 'Pattern database filename must end with number'."\n";
-}
+$player->size($size);
+$player->path($dirname);
+$player->tiestats($pathname);
 

@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use DB_File;
 use Carp;
-our $VERSION = 0.07;
+our $VERSION = 0.08;
 
 sub new {
   my $this = shift;
@@ -16,74 +16,69 @@ sub new {
   $self->{_size} = 18; # default board size
   $self->{_veclengths} = {};
   $self->{_maxmove} = { # maximum move number to consider when learning pattern
-    2 => 500, # ie no effective maximum
+    1 => 500, # ie no effective maximum
+    2 => 500,
     3 => 500,
     4 => 500,
-    6 => 20,
-    8 => 10,
-    9 => 30,
+    5 => 200, # a corner only pattern
+    7 => 20,
+    8 => 25,
+   10 => 30,
    12 => 15,
    18 => 10,
-  };
-  $self->{_matrices} = { # symmetrys of the square (identity not included)
-    1 => [0,-1,1,0],
-    2 => [-1,0,0,-1],
-    3 => [0,1,-1,0],
-    4 => [0,1,1,0],
-    5 => [1,0,0,-1],
-    6 => [0,-1,-1,0],
-    7 => [-1,0,0,1],
-  };
-  $self->{_gradegroups} = { # relative rank of k (kyu), d (dan) and p (pro)
-    k => 2,
-    d => 1,
-    p => 0,
   };
   $self->{_pattern}    = {}; # the current pattern
   $self->{_rating}     = {}; # the current ratings
   $self->{_psym}       = {}; # to hold symmetries of the current pattern
   $self->{_rsym}       = {}; # to hold symmetries of the current ratings
-  $self->{_ratings}    = {}; # a board for Black to find the best move
+  $self->{_ratings}    = {}; # a board to find the best move
   $self->{_KGScleanup} = 0;  # KGS cleanup mode (limited passing)
-  $self->{_weakest}    = '4k'; # lowest rank to learn from ( '30k' implies learn from, even if no rank information is present )
+  $self->{_weakest}    = '30k'; # lowest rank to learn from ( '30k' implies learn from, even if no rank information is present )
   $self->{_timeleftB}  = 100; # some initial high number so it won't pass at the beginning
   $self->{_timeleftW}  = 100;
   $self->{_psizenow}   = 0;
-  $self->{_ratingIncrement} = 1; # may be set (higher) by the user, for example when learning joseki
+  $self->{_passpropensity}   = 0; # the smaller the value, the less likely it is to pass
+  $self->{_ratingIncrement}  = 1; # may be set (higher) by the user, for example when learning joseki
+  $self->{_incrementbygrade} = 0; # if true, increment becomes how many grades stronger than _weakest the player is.
   $self->{_debug}      = 0;
+  $self->{_logfile}    = './playerlog.txt';
   bless $self, $class;
   return $self;
 }
 
 sub size {
   my $self = shift;
-  my $size = shift if @_;
+  my $size = shift;
+  $size ||= 19;
   $size--;
   if ($size) {
     if ($size =~ /\d+/) {
       $self->{_size} = $size;
       $self->{_veclengths} = {
+        1 => 1,  # for all board sizes
         2 => 3,  # for all board sizes
         3 => 4,  # for all board sizes
         4 => 7,  # for all board sizes
+        5 => 9,  # for all board sizes
       };
       for ($size) {
         if    ($_ == 8)  { $self->{_veclengths}{8}  = 21; last}
-        elsif ($_ == 12) { $self->{_veclengths}{6}  = 13;
+        elsif ($_ == 12) { $self->{_veclengths}{7}  = 16;
                            $self->{_veclengths}{12} = 43; last
                          }
-        elsif ($_ == 18) { $self->{_veclengths}{9}  = 25;
+        elsif ($_ == 18) { $self->{_veclengths}{10} = 31;
                            $self->{_veclengths}{18} = 91; last
                          }
         croak 'Unsupported board size'."\n";
       }
       # how many 8 bit repetitions do i need? (1 holds 4 points)
-      # For 9x9 games use 2, 3, 4, 8
-      # For 13x13 games use 2, 3, 4, 6, 12
-      # For 19x19 games use 2, 3, 4, 9, 18
+      # For 9x9 games   use 2, 3, 4, 8
+      # For 13x13 games use 2, 3, 4, 7, 12
+      # For 19x19 games use 2, 3, 4, 10, 18
       # To create your own pattern size, the rule is square it, divide it by 4, round up.
-      # So for example you could add 5 to create 6x6 patterns.
+      # So for example you could add 5 => 9 to create 6x6 patterns.
       # Then place an entry in for your new size in $self->{_maxmove}, eg 5 => 500
+      # and edit the inrange sub
     } else {
       croak 'Illegal value ', $size;
     }
@@ -132,11 +127,48 @@ sub increment {
   return $self->{_ratingIncrement}
 }
 
+sub incrementbygrade {
+  my $self = shift;
+  my $flag = shift;
+  $self->{_incrementbygrade} = $flag if defined $flag and $flag=~ /0|1/;
+  return $self->{_incrementbygrade}
+}
+
+sub passifopponentpasses {
+  my $self = shift;
+  my $flag = shift;
+  $self->{_passifopponentpasses} = $flag if defined $flag and $flag=~ /0|1/;
+  return $self->{_passifopponentpasses}
+}
+
+sub bypass {
+  my $self = shift;
+  my @psizes = @_;
+  for (@psizes) {
+    delete $self->{_veclengths}{$_ - 1};
+  }
+  return $self->{_veclengths}
+} 
+
 sub debug {
   my $self = shift;
-  my $debug = shift;
-  $self->{_debug} = $debug if defined $debug and $debug =~ /0|1/;
+  my $flag = shift;
+  $self->{_debug} = $flag if defined $flag and $flag =~ /0|1/;
   return $self->{_debug}
+}
+
+sub passpropensity {
+  my $self = shift;
+  my $passpropensity = shift;
+  $self->{_passpropensity} = $passpropensity if defined $passpropensity and $passpropensity =~ /[+-]?\d+/;  # matches integers
+  return $self->{_passpropensity}
+}
+
+sub logfile {
+  my $self = shift;
+  my $logfile = shift;
+  $self->{_logfile} = $logfile if defined $logfile;
+  return $self->{_logfile}
 }
 
 sub _iterboard (&$) {
@@ -150,19 +182,22 @@ sub _iterboard (&$) {
 
 sub initboard {
   my ($self, $referee) = @_;
-  updateratings($self, $referee, 'B', $self->{_size});
-  updateratings($self, $referee, 'W', $self->{_size});
 }
 
 sub update {
-  my ($self, $colour, $referee) = @_;
+  my ($self, $colour, $referee, $point) = @_;
   resetratings($self);
-  for (sort { $b <=> $a } keys %{$self->{_veclengths}}) { # biggest first
-    my $match = updateratings($self, $referee, $colour, $_);
+  my @keys = sort { $b <=> $a } keys %{$self->{_veclengths}}; # biggest first
+
+  for my $i (0..$#keys) { 
+    my ($match, $thisplayable) = updateratings($self, $referee, $colour, $keys[$i]);
+    myprint ($self, 'Playable area: ', $thisplayable) if $self->{_debug};
     my ($legal, $candidate) = matchedlegal($self, $colour, $referee);
-    myprint ('Pattern size: ', $_, 'Match? ', $match, 'Legal? ', $legal) if $self->{_debug};
+    myprint ($self, 'Pattern size: ', $keys[$i], 'Match? ', $match, 'Legal? ', $legal) if $self->{_debug};
     if ($match and $legal) {
-      last;
+      if ($i < $#keys) {
+        last #if $thisplayable > ($keys[$i+1]+1)**2; # maybe the next pattern size has an area at least as big as the one that matched
+      }
     }
   }
 }
@@ -175,9 +210,9 @@ sub matchedlegal {
     /(.*),(.*)/;
     my ($x, $y) = ($1, $2);
     my $candidate = $referee->insertpoints($x, $y);
-    myprint ('Checking legality of', $x, $y, $candidate) if $self->{_debug};
+    myprint ($self, 'Checking legality of', $x, $y, $candidate) if $self->{_debug};
     if ($referee->islegal($colour, $candidate)) {
-      myprint ($candidate, 'is legal') if $self->{_debug};
+      myprint ($self, $candidate, 'is legal') if $self->{_debug};
       return 1, $candidate unless fillingeye($self, $referee, $x, $y, $colour);
     }
   }
@@ -197,20 +232,20 @@ sub chooselegalmove {
   my ($point, $goodenough);
   my @suggested = choosemove($self);
 
- # if KGScleanup is on, don't reject a move because its rating is low
+  # if KGScleanup is on, don't reject a move because its rating is too low
   if ($self->{_KGScleanup}) {
-    $goodenough = 0;
-  } else {
     $goodenough = -50;
+  } else {
+    $goodenough = $self->{_passpropensity};
   }
 
   for (@suggested) {
     /(.*),(.*)/;
     my ($x, $y) = ($1, $2);
     my $candidate = $referee->insertpoints($x, $y);
-    myprint ('Testing move:', $x, $y, $candidate) if $self->{_debug};
-    if ($referee->islegal('B', $candidate)) {
-      myprint ('Is legal:', $x, $y, $candidate) if $self->{_debug};
+    myprint ($self, 'Testing move:', $x, $y, $candidate) if $self->{_debug};
+    if ($referee->islegal($colour, $candidate)) {
+      myprint ($self, 'Is legal:', $x, $y, $candidate) if $self->{_debug};
       unless (fillingeye($self, $referee, $x, $y, $colour)) {
         if ($self->{_ratings}{$x.','.$y} > $goodenough) {
           $point = $candidate;
@@ -219,7 +254,7 @@ sub chooselegalmove {
       }
     }
   }
-  return $point || pass($self, $referee)
+  return $point || pass($referee)
 }
 
 sub fillingeye {
@@ -249,6 +284,9 @@ sub fillingeye {
 sub learn {
   my ($self, $colour, $point, $referee, $counter, $rank) = @_;
 
+  if ($self->{_incrementbygrade}) {
+    $self->{_ratingIncrement} = parserank($rank) - parserank($self->{_weakest}) + 1;
+  }
   if (($colour eq 'B' or $colour eq 'W') and isteacher($self, $rank)) {
     unless ($referee->ispass($point)) {
       my ($x, $y) = $referee->extractpoints($point);
@@ -256,20 +294,20 @@ sub learn {
       for (keys %{$self->{_veclengths}}) {
         unless ($counter > $self->{_maxmove}{$_}) {
         $self->{_psizenow} = $_;
-        myprint ('Pattern size is', $_) if $self->{_debug};
-        myprint ('x is', $x, ', y is', $y) if $self->{_debug};
+        myprint ($self, 'Pattern size is', $_) if $self->{_debug};
+        myprint ($self, 'x is', $x, ', y is', $y) if $self->{_debug};
 
           _iterboard {
             my ($i, $j) = @_;
-            my $xoffset = $x + $i - $_;
-            my $yoffset = $y + $j - $_;
+            my $xoffset = $x + $i - $self->{_psizenow};
+            my $yoffset = $y + $j - $self->{_psizenow};
             if (inrange($self, $xoffset, $yoffset)) {
-              myprint ('Inrange') if $self->{_debug};
+              myprint ($self, 'Inrange') if $self->{_debug};
               clearhashes($self);
               board2pattern($self, $xoffset, $yoffset, $referee);
-              unless (($_ == 2 or $_ == 3 or $_ == 4) and isempty($self, $self->{_pattern})) {
+              unless (($_ == 1 or $_ == 2 or $_ == 3 or $_ == 4) and isempty($self->{_pattern})) {
                 my $hashname = $self->{_pathtoDBs}.$self->{_DBnameprefix}.$colour.$_;
-                myprint ('DB pathname is', $hashname) if $self->{_debug};
+                myprint ($self, 'DB pathname is', $hashname) if $self->{_debug};
                 genpattern($self, $_ - $i, $_ - $j, $colour, $hashname);
                 unless ($_ == 8 or $_ == 12 or $_ == 18) { # don't reverse if whole board pattern
                   swappatterncolours($self);
@@ -293,7 +331,7 @@ sub genpattern {
   my $maxhash = $self->{_pathtoDBs}.$self->{_Maxnameprefix}.$colour;
   my ($max, $mcode) = findmaxvec($self);
   if (not exists $self->{$maxhash}{$$max}) {
-    myprint ('Pattern not maxxed') if $self->{_debug};
+    myprint ($self, 'Pattern not maxxed') if $self->{_debug};
     my $invcode = getinvert($mcode);
     my ($r, $s) = transformpoint($self, $invcode, $i, $j);
     my $ismaxxed = match2vec($self, $hash, $max, $r, $s);
@@ -305,13 +343,16 @@ sub updateratings{
   my ($self, $referee, $colour, $psize) = @_;
   my $hashname = $self->{_pathtoDBs}.$self->{_DBnameprefix}.$colour.$psize;
   $self->{_psizenow} = $psize;
-  my $match;
+  my $match = 0;
+  my $maxplayablearea = 0;
   _iterboard {
     my ($i, $j) = @_;
-    my $xoffset = $i - $psize + 2;
-    my $yoffset = $j - $psize + 2;
+    my $xoffset = $i - 2;
+    my $yoffset = $j - 2;
     if (inrange($self, $xoffset, $yoffset)) {
-      clearhashes($self);
+      $self->{_pattern} = {};
+      $self->{_psym}    = {};
+      $self->{_rsym}    = {};
       board2pattern($self, $xoffset, $yoffset, $referee);
       my ($max, $mcode) = findmaxvec($self);
       my $invcode = getinvert($mcode);
@@ -324,11 +365,17 @@ sub updateratings{
         transform($self, $invcode, $self->{_rsym}, $self->{_rating});
         # transform to _psym
         transform($self, $invcode, $self->{_psym}, $self->{_pattern});
+        my $playablearea = playablearea($self->{_pattern});
+        $maxplayablearea = $playablearea if $playablearea > $maxplayablearea;
         loadratings($self, $xoffset, $yoffset);
+        if ($self->{_debug}) {
+          myprint( $self, showpattern($self, $self->{_pattern}) );
+          myprint ($self, ratings2string($self, $vec));
+        }
       }
     }
-  } $self->{_size};
-  return $match
+  } $self->{_size} - $psize + 4;
+  return $match, $maxplayablearea
 }
 
 # here you can define how pattern scores in the database are converted into a point's score
@@ -337,13 +384,15 @@ sub loadratings {
   my ($self, $x, $y) = @_;
 #  my ($av, $sd, $max) = stats($self, $self->{_rsym}, $self->{_psym});
 #  $av ||= 1;
-  my $density = density($self, $self->{_psym});
+#  my $density = density($self, $self->{_psym});
   _iterboard {
     my ($i, $j) = @_;
     my $r = $i + $x;
     my $s = $j + $y;
     unless (offboard($self, $r, $s)) {
-      $self->{_ratings}{$r.','.$s} += ($self->{_rsym}{$i.','.$j} * $density);
+      my $distance = dist($i, $j, $self->{_psizenow}/2, $self->{_psizenow}/2) + 0.5;
+      my $ratio = bwratio($self, $self->{_psym});
+      $self->{_ratings}{$r.','.$s} += ( $self->{_rsym}{$i.','.$j}*$ratio/($distance**2) );
     }
   } $self->{_psizenow};
 }
@@ -358,43 +407,44 @@ sub retrieve {
     if (exists $self->{_veclengths}{$iveclength}) {
       $self->{_psizenow} = $iveclength;
       str2temp($self, $str, $self->{_pattern});
-      myprint(showpattern($self, $self->{_pattern}));
-      myprint('Symmetrys ', @{findsymmetrys($self)});
+      myprint ($self, showpattern($self, $self->{_pattern}));
+      myprint ($self, 'Symmetrys ', @{findsymmetrys($self)});
       my ($vec, $tcode) = findmaxvec($self);
       vec2pattern($self, $$vec, $self->{_rsym});
-      myprint('Max of pattern ');
-      myprint(showpattern($self, $self->{_rsym}));
+      myprint ($self, 'Max of pattern ');
+      myprint ($self, showpattern($self, $self->{_rsym}));
       my $ratings = $self->{$db}{$$vec};
       if ($ratings) {
         $str = ratings2string($self, $ratings);
-        myprint('Ratings');
-        myprint($str);
+        myprint ($self, 'Ratings');
+        myprint ($self, $str);
         vec2vpattern($self, $ratings, $self->{_rating});
-        myprint('Stats ', stats($self, $self->{_rating}, $self->{_pattern}));
-        myprint('Maxxed') if mymax($self, $self->{_rating}) == 255;
+        myprint ($self, 'Stats ', stats($self, $self->{_rating}, $self->{_pattern}));
+        myprint ($self, 'Maxxed') if mymax($self, $self->{_rating}) == 255;
       } else {
-        myprint('No ratings found');
+        myprint ($self, 'No ratings found');
       }
     } else {
-      myprint('Pattern of unrecognised length: ', length $str);
+      myprint ($self, 'Pattern of unrecognised length: ', length $str);
     }
   } else {
-    myprint('No pattern supplied'); 
+    myprint ($self, 'No pattern supplied'); 
   } 
 }
 
 sub DBdump {
   my ($self, $patternhash) = @_;
   clearhashes($self);
-
   $patternhash =~ /[a-zA-Z]*(\d+)$/;
   $self->{_psizenow} = $1;
   myprint ('Pattern size:', $self->{_psizenow}) if $self->{_debug};
+
   while (my ($key, $value) = each %{$self->{$patternhash}}) {
     vec2pattern($self, $key, $self->{_pattern});
-    myprint(showpattern($self, $self->{_pattern}));
-    myprint(ratings2string($self, $value));
+    myprint ($self, showpattern($self, $self->{_pattern}));
+    myprint ($self, ratings2string($self, $value));
   }
+
 }
 
 # get info about a pattern database (for debugging)
@@ -407,7 +457,7 @@ sub tiestats {
     $count++;
   }
 
-  myprint('Total: ', $count) if defined $count;
+  myprint ($self, 'Total: ', $count) if defined $count;
 }
 
 # load the pattern hash with the board at origin x,y (size = _psize)
@@ -482,20 +532,97 @@ sub updateMax {
   my $self = shift;
 
   for my $colour ('B', 'W') {
-
     my $maxhash = $self->{_pathtoDBs}.$self->{_Maxnameprefix}.$colour;
-    for (keys %{$self->{_veclengths}}) {
 
+    for (keys %{$self->{_veclengths}}) {
       my $patternhash = $self->{_pathtoDBs}.$self->{_DBnameprefix}.$colour.$_;
-      $self->{_psizenow} = $_;
-      while (my ($key, $value) = each %{$self->{$patternhash}}) {
-        unless (exists $self->{$maxhash}{$key}) {
-          $self->{$maxhash}{$key} = undef if ismaxxed($self, $value);
-        }
+      updateMaxthisDB($self, $maxhash, $patternhash, $_);
+    }
+
+  }
+}
+
+sub updateMaxthisDB {
+  my ($self, $maxhash, $patternhash, $psize) = @_;  
+  $self->{_psizenow} = $psize;
+
+  while (my ($key, $value) = each %{$self->{$patternhash}}) {
+    if (ismaxxed($self, $value)) {
+      $self->{$maxhash}{$key} = undef unless exists $self->{$maxhash}{$key};
+    } else {
+      delete $self->{$maxhash}{$key} if exists $self->{$maxhash}{$key};
+    }
+  }
+}
+
+#delete keys from the MaxDB if that pattern is not maxxed
+
+sub deletefromMaxDB {
+  my $self = shift;
+
+  for my $colour ('B', 'W') {
+    my $maxhash = $self->{_pathtoDBs}.$self->{_Maxnameprefix}.$colour;
+      my %test;
+
+    while (my ($pvec, $rvec) = each %{$self->{$maxhash}}) {
+      my %rhash = reverse %{$self->{_veclengths}};
+      $self->{_psizenow} = $rhash{length( $pvec )};
+      my $phash = $self->{_pathtoDBs}.$self->{_DBnameprefix}.$colour.$self->{_psizenow};
+      unless ( ismaxxed($self, $self->{$phash}{$pvec}) ) {
+        delete $self->{$maxhash}{$pvec};
+        print 'Deleted a key relating to '."$phash\n";
       }
+    }
+
+  }
+
+}
+
+sub statDB {
+
+  my ($self, $patternhash) = @_;
+  clearhashes($self);
+  $patternhash =~ /[a-zA-Z]*(\d+)$/;
+  $self->{_psizenow} = $1;
+  my %stats;
+
+  while (my ($key, $value) = each %{$self->{$patternhash}}) {
+    if (defined $value) {
+      vec2vpattern($self, $value, $self->{_rating});
+      my $max = mymax($self, $self->{_rating});
+      $stats{$max}++;
+    } else {
+      delete $self->{$patternhash}{$key};
     }
   }
 
+  foreach my $key (sort {$a <=> $b} (keys(%stats))) {
+    myprint( $self, $key.' '.$stats{$key});
+  }
+
+}
+
+sub housekeepDBs {
+  my $self = shift;
+  $self->{_psizenow} = 4;
+  for my $colour ('B', 'W') {
+    my $patternhash = $self->{_pathtoDBs}.$self->{_DBnameprefix}.$colour.'4';
+
+    while (my ($key, $value) = each %{$self->{$patternhash}}) {
+      vec2pattern($self, $key, $self->{_pattern});
+      delete $self->{$patternhash}{$key} if countofedges($self->{_pattern}) > 13;
+    }
+  }
+}
+
+sub countofedges {
+  my $ref = shift;
+  my $count = 0;
+  _iterboard {
+    my ($x, $y) = @_;
+    $count++ if $ref->{$x.','.$y} eq '-';
+  } 4;
+  return $count
 }
 
 # for a pattern, find its symmetrys
@@ -540,14 +667,15 @@ sub findmaxvec {
 
 sub transformpoint {
   my ($self, $matrixcode, $x, $y) = @_;
-  return $x, $y if $matrixcode == 0; # save time if its the identity matrix
-  my $offset = $self->{_psizenow}/2;
-  $x -= $offset;
-  $y -= $offset;
-  my $mref = $self->{_matrices}{$matrixcode};
-  my $trx = ($mref->[0] * $x) + ($mref->[1] * $y);
-  my $try = ($mref->[2] * $x) + ($mref->[3] * $y);
-  return $offset + $trx, $offset + $try
+  my $offset = $self->{_psizenow};
+  return $x          , $y           if $matrixcode == 0;
+  return $offset - $y, $x           if $matrixcode == 1;
+  return $offset - $x, $offset - $y if $matrixcode == 2;
+  return $y          , $offset - $x if $matrixcode == 3;
+  return $y          , $x           if $matrixcode == 4;
+  return $x          , $offset - $y if $matrixcode == 5;
+  return $offset - $y, $offset - $x if $matrixcode == 6;
+  return $offset - $x, $y;
 }
 
 sub transform {
@@ -573,7 +701,7 @@ sub match2vec {
     vec($rvec, p_area($self), 8) = 0;  
   }
   my $offset = $y * ($self->{_psizenow} + 1) + $x;
-  if (vec($rvec, $offset, 8) > (255 - $self->{_ratingIncrement})) {
+  if (vec($rvec, $offset, 8) + $self->{_ratingIncrement} >= 255) {
     vec($rvec, $offset, 8) = 255;
     $res = 1;
   } else {
@@ -600,7 +728,7 @@ sub showpattern{
 # turn a ratings hash into a string
 
 sub showratings{
-  my ($self) = @_;
+  my $self = shift;
   my $h = '';
   my $size = $self->{_size};
   _iterboard {
@@ -608,10 +736,17 @@ sub showratings{
     my $value = $self->{_ratings}{$x.','.$y};
     $value ||= ' . ';
     unless ($value eq ' . ') {
-      $value = int $value if $value =~ /\d/;      
+      $value = int $value if $value =~ /\d/;
+      for ($value) {
+        if (/^\d\d\d\d$/) { last }
+        if (/^\d\d\d$/) { $value = $value.' '; last }
+        if (/^\d\d$/)   { $value = ' '.$value.' '; last}
+        if (/^\d$/)     { $value = $value.'   '; last }
+      die 'Unknown rating type: '. $value."\n";
+      }
     }
-    $h .= '['.$value.']';
-    $h .= "\n" if $x == $size;
+    $h .= '|'.$value;
+    $h .= '|'."\n" if $x == $size;
   } $size;
   return $h
 }
@@ -693,8 +828,15 @@ sub ratings2string {
   my $h = '';
   my $ubound = p_area($self) - 1;
   for my $i (0..$ubound) {
-    $h .= ' '.vec($vec, $offset, 8);
-    $h .= "\n" if ($i + 1) % ($self->{_psizenow} + 1) == 0;
+    my $value = vec($vec, $offset, 8);
+    for ($value) {
+      if (/^\d\d\d$/) { last }
+      if (/^\d\d$/)   { $value = $value.' '; last }
+      if (/^\d$/)     { $value = ' '.$value.' '; last }
+      die 'Unknown rating type';
+    }
+    $h .= '|'.$value;
+    $h .= '|'."\n" if ($i + 1) % ($self->{_psizenow} + 1) == 0;
     $offset += 1;
   }
   return $h
@@ -721,7 +863,7 @@ sub resetratings {
   my ($self) = @_;
   _iterboard {
     my ($i, $j) = @_;
-    $self->{_ratings}{$i.','.$j} = undef; #if $self->{_ratings}{$i.','.$j} ne 'i';
+    $self->{_ratings}{$i.','.$j} = undef;
   } $self->{_size};
 }
 
@@ -795,6 +937,20 @@ sub density {
   return ($count + 1)/($count + $empty)
 }
 
+sub bwratio {
+  my ($self, $ref) = @_;
+  my $bcount = 0;
+  my $wcount = 0;
+  _iterboard {
+    my ($x, $y) = @_;
+    for ($ref->{$x.','.$y}) {
+      if ($_ eq 'o') {$wcount++; last}
+      if ($_ eq 'x') {$bcount++; last}
+    }
+  } $self->{_psizenow};
+  return ($wcount + $bcount + 1)/(($bcount - $wcount)**2 + 1)
+}
+
 sub offboard {
   my ($self, $x, $y) = @_;
   my $size = $self->{_size};
@@ -807,32 +963,40 @@ sub offboard {
 sub inrange {
   my ($self, $x, $y) = @_;
   my $bsize = $self->{_size};
-  myprint ('Testing range of', $x, $y) if $self->{_debug};
+
   for ($self->{_psizenow}) {
-    if ($_ == 2) {
-      return 1 if inregion($x, $y, 2, $bsize - 6);
+    if ($_ == $bsize) {
+      return 1 if $x == 0 and $y == 0;
       last
     }
-    if ($_ == 3) {
-      return 1 if inregion($x, $y,  2, $bsize - 7);
-      return 1 if inregion($x, $y, -1, $bsize - 1) and not inregion($x, $y,  0, $bsize - 3);
+    if ($_ == 10 and $bsize == 18) {
+      return 1 if iscorner($x, $y, $bsize - $_ + 1);
+      last
+    }
+    if ($_ == 7 and $bsize == 12) {
+      return 1 if iscorner($x, $y, $bsize - $_ + 1);
+      last
+    }
+    if ($_ == 5) {
+      return 1 if iscorner($x, $y, $bsize - $_ + 1);
       last
     }
     if ($_ == 4) {
-      return 1 if inregion($x, $y,  2, $bsize - 8);
-      return 1 if inregion($x, $y, -2, $bsize ) and not inregion($x, $y,  0, $bsize - 4);
+      return 1 if insquare($x, $y,  2, $bsize - 8);
+      return 1 if insquare($x, $y, -2, $bsize ) and not insquare($x, $y,  0, $bsize - 4) and not toofar($x, $y, $bsize - 2);
       last
     }
-    if ($_ == 6 and $bsize == 12) {
-      return 1 if isquarter($x, $y, $bsize/2);
+    if ($_ == 3) {
+      return 1 if insquare($x, $y,  2, $bsize - 7);
+      return 1 if insquare($x, $y, -1, $bsize - 1) and not insquare($x, $y,  0, $bsize - 3);
       last
     }
-    if ($_ == 9 and $bsize == 18) {
-      return 1 if isquarter($x, $y, $bsize/2);
+    if ($_ == 2) {
+      return 1 if insquare($x, $y, 2, $bsize - 6);
       last
     }
-    if ($_ == $bsize) {
-      return 1 if $x == 0 and $y == 0;
+    if ($_ == 1) {
+      return 1 if insquare($x, $y, 0, $bsize - 2);
       last
     }
     croak 'Unknown pattern size'."\n";
@@ -840,21 +1004,30 @@ sub inrange {
   return 0
 }
 
-sub inregion {
-  my ($x, $y, $offset, $length) = @_;
-  return 0 if (($x < $offset) or
-               ($x > ($offset + $length)) or
-               ($y < $offset) or
-               ($y > ($offset + $length)));
+sub insquare {
+  my ($x, $y, $origin, $length) = @_;
+  return 0 if (($x < $origin) or
+               ($x > ($origin + $length)) or
+               ($y < $origin) or
+               ($y > ($origin + $length)));
   return 1
 }
 
-sub isquarter {
+sub iscorner {
   my ($x, $y, $q) = @_;
   return 1 if ($x == -1 and $y == -1) or
-              ($x == -1 and $y == $q + 1) or
-              ($y == -1 and $x == $q + 1) or
-              ($x == $q + 1 and $y == $q + 1);
+              ($x == -1 and $y == $q) or
+              ($y == -1 and $x == $q) or
+              ($x == $q and $y == $q);
+  return 0
+}
+
+sub toofar {
+  my ($x, $y, $q) = @_;
+  return 1 if ($x == -2 and $y == -2) or
+              ($x == -2 and $y == $q) or
+              ($y == -2 and $x == $q) or
+              ($x == $q and $y == $q);
   return 0
 }
 
@@ -882,54 +1055,48 @@ sub stats {
 sub isteacher {
   my ($self, $rank) = @_;
   my $result = 0;
-  my ($integerrank, $integergrade, $weakestteacherintegerrank, $weakestteacherintegergrade);
-  ($integerrank, $integergrade) = parserank($self, $rank);
-  ($weakestteacherintegerrank, $weakestteacherintegergrade) = parserank($self, $self->{_weakest});
+  my $rankinteger = parserank($rank);
+  my $teacherrankinteger = parserank($self->{_weakest});
   
-  if (($integergrade lt $weakestteacherintegergrade) or
-      ($integergrade == $self->{_gradegroups}{'k'} and 
-       $integerrank <= $weakestteacherintegerrank and 
-       $integergrade eq $weakestteacherintegergrade) or
-      (($integergrade == $self->{_gradegroups}{'d'} or $integergrade == $self->{_gradegroups}{'p'}) and 
-       $integerrank >= $weakestteacherintegerrank and 
-       $integergrade eq $weakestteacherintegergrade)) {
-    $result = 1;
-  }
+  $result = 1 if $teacherrankinteger <= $rankinteger;
 
-  myprint ('Is teacher?', $result) if $self->{_debug};
+  myprint ($self, 'Is teacher?', $result) if $self->{_debug};
   return $result
 }
 
-# If rank is undefined, a rank equivalent to 30k is returned
+# If rank is undefined, a rank equivalent to 31k is returned
 
 sub parserank {
-  my ($self, $rank) = @_;
-  my $integergradegroup;
-  my $integerrank;
+  my $rank = shift;
   if (defined $rank) {
-    if ($rank =~ /^(\d{1,2})(K|k|D|d|P|p)\?*$/) {
-      $integerrank = $1;
-      $integergradegroup = $self->{_gradegroups}{lc $2};
-    } else {
-      croak 'Unknown rank format'."\n";
-    }
-  } else {
-    $integerrank = '30';
-    $integergradegroup = $self->{_gradegroups}{'k'};    
+    if    ((lc $rank) =~ /^\s*(\d+)[\s-]*k/) { return -$1 + 1 }
+    elsif ((lc $rank) =~ /^\s*(\d+)[\s-]*d/) { return  $1     }
+    elsif ((lc $rank) =~ /^\s*(\d+)[\s-]*p/) { return  $1 + 9 }
+    elsif ($rank =~ /^(\d+)/)                { return  $1/100 - 20 } # approx. conversion for elo ranks
+    else                                     { return  -30    }
   }
-  return $integerrank, $integergradegroup  
+  return -30
 }
 
 sub isempty {
-  my ($self, $ref) = @_;
+  my $ref = shift;
   for (values %{$ref}) {
     return 0 if /o|x/;
   }
   return 1
 }
 
+sub playablearea {
+  my $ref = shift;
+  my $playable = 0;
+  for (values %{$ref}) {
+    $playable++ if /\.|o|x/;
+  }
+  return $playable
+}
+
 sub pass {
-  my ($self, $referee) = @_;
+  my $referee = shift;
   if ($referee->{_const}{pointformat} eq 'sgf') {
     return ''
   } else {
@@ -978,11 +1145,24 @@ sub clearhashes {
 }
 
 sub myprint {
+  my $self = shift;
   my @messages = @_;
   if (exists $messages[0]) {
-	  open(LOG, ">>", './playerlogfile.txt') or die 'Can\'t open'."\n";
+	  open(LOG, ">>", $self->{_logfile}) or die 'Can\'t open'.$self->{_logfile}."\n";
 		  print LOG (join ' ', @messages, "\n");
 	  close(LOG);
+  }
+}
+
+sub untieDBs {
+  my $self = shift;
+  for my $colour ('B', 'W') {
+    my $hashfilename = $self->{_pathtoDBs}.$self->{_Maxnameprefix}.$colour;
+    untie %{$self->{$hashfilename}};
+    for (keys %{$self->{_veclengths}}) {
+      $hashfilename = $self->{_pathtoDBs}.$self->{_DBnameprefix}.$colour.$_;
+      untie %{$self->{$hashfilename}};
+    }
   }
 }
 
@@ -1013,7 +1193,7 @@ To play a move:
   $referee->play($colour, $move);
   $player->update($colour, $referee);
 
-Or see kgspot.pl which is included in the scripts folder.
+There are scripts in the examples folder for connecting this 'bot' to KGS or CGOS.
 
 Before learning, the following parts of the 'new' method can (and 
 in some cases, should) be edited:
@@ -1021,11 +1201,38 @@ in some cases, should) be edited:
 $self->{_maxmove} For example, its probably not worth looking beyond move 10 when matching
 whole board 19x19 games.
 
-$self->{_weakest} For example, if matching patterns from a 9 handicap game between a 3 kyu
-and a 12 kyu, you may want to disregard the moves of the 12kyu
-
 The function loadratings can be tweaked as you see fit. For example, at the moment it gives
 a higher score to a move close to the centre of a pattern than one on the edge.
+
+=head1 Options
+
+=head2 path
+
+Set to whichever pattern directory you wish to use. Default is the current directory.
+
+  $player->path('path_to_my_pattern_directory');
+
+=head2 teacher
+
+When learning patterns from an sgf file, you can use this to ignore moves by players whose grade is too low.
+Default is '30k'
+
+  $player->teacher('30k'); # learn from all players, even if no grade information is present
+  $player->teacher('10k'); # learn from all players of grade 10kyu and better
+
+=head2 increment
+
+When learning, the default is to add 1 to the frequency data associated with a pattern everytime that pattern is found.
+If you want it to add more than 1, if for example you are feeding in a joseki file, use this method. 
+
+  $player->increment(50); # learn from all players, even if no grade information is present
+
+=head2 incrementbygrade
+
+Similar to increment, but will increase the frequency data by however many grades the player is above teacher 
+
+  $player->teacher('10k');
+  $player->incrementbygrade(1); # a 4kyu move now increases the frequency data by 6
 
 =head1 Debugging
 
@@ -1072,17 +1279,14 @@ KGS doesn't seem to handle this situation well, and neither does this program.
 
 =head1 Ideas
 
-When learning, information on the closest move (in terms of the sequence of the game) could
-be stored.
+When learning, information on the closest move (in terms of the sequence of the game) could be stored.
 Have an additional piece of information in a pattern's ratings - how often this pattern has
 occurred after both players pass in a scored game.
+Have a maximum frequency higher than 255, then when a pattern hits that number, all updating
+of patterns of that size ends.
 
 =head1 AUTHOR (version 0.01)
 
-Daniel Gilder
-
-=head1 THANKS
-
-To Ricardo Signes for explaining some of the workings of Games::Goban
+DG
 
 =cut

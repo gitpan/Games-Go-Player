@@ -5,12 +5,19 @@ README
 t/Games-Go-Player.t
 lib/Games/Go/Player.pm
 scripts/kgsbot.pl
+scripts/kgsbot.ini
 scripts/kgshoover.pl
 scripts/kgsplayers.txt
 scripts/tiestats.pl
 scripts/kgslearn.sh
-scripts/removeTags.pl
-scripts/kgsuserfile.pl
 scripts/kgsuserdir.pl
+scripts/learnfromdir.sh
+scripts/learnfromfile.pl
+scripts/cgosbot.pl
+scripts/cgosconfig9.txt
+temp/
+DBlog/log.txt
+sgf/test.sgf
 
-META.yml                                 Module meta-data (added by MakeMaker)
+META.yml                                 Module YAML meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)

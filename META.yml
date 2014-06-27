@@ -1,12 +1,24 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Games-Go-Player
-version:      0.07
-version_from: lib/Games/Go/Player.pm
-installdirs:  site
+---
+abstract: 'plays a game of Go.'
+author:
+  - 'Daniel Gilder <deg@cpan.org>'
+build_requires:
+  ExtUtils::MakeMaker: 0
+configure_requires:
+  ExtUtils::MakeMaker: 0
+dynamic_config: 1
+generated_by: 'ExtUtils::MakeMaker version 6.66, CPAN::Meta::Converter version 2.120921'
+license: unknown
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: Games-Go-Player
+no_index:
+  directory:
+    - t
+    - inc
 requires:
-    Carp:                          0
-    DB_File:                       0
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.30_01
+  Carp: 0
+  DB_File: 0
+  Test::More: 0
+version: 0.08

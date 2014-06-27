@@ -6,10 +6,11 @@ WriteMakefile(
     NAME              => 'Games::Go::Player',
     VERSION_FROM      => 'lib/Games/Go/Player.pm', # finds $VERSION
     PREREQ_PM         => {
-                            DB_File => 0,
-                            Carp    => 0,
-                          }, # e.g., Module::Name => 1.1
+                            DB_File    => 0,
+                            Carp       => 0,
+                            Test::More => 0
+                          },
     ($] >= 5.005 ?     ## Add these new keywords supported since 5.005
       (ABSTRACT_FROM  => 'lib/Games/Go/Player.pm', # retrieve abstract from module
-       AUTHOR         => 'Daniel Gilder <dan@>') : ()),
+       AUTHOR         => 'Daniel Gilder <deg@cpan.org>') : ()),
 );
